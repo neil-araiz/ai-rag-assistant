@@ -2,8 +2,9 @@ import os
 import shutil
 import uuid
 from fastapi import APIRouter, UploadFile, File, Depends, BackgroundTasks, HTTPException
-from prisma import Prisma
-from app.db.database import get_db, db
+from sqlalchemy.orm import Session
+from app.db.database import get_db, SessionLocal
+from app.models.document import Document
 from app.services.pdf_service import PDFService
 from app.db.vector_store import VectorStore
 from app.core.config import get_settings
@@ -12,6 +13,7 @@ router = APIRouter()
 settings = get_settings()
 
 async def process_pdf_background(document_id: int, file_path: str):
+    db = SessionLocal()
     pdf_service = PDFService()
     vector_store = VectorStore()
     
@@ -33,15 +35,15 @@ async def process_pdf_background(document_id: int, file_path: str):
             )
         
         # 4. Save full content
-        content = "\n".join([p["content"] for p in pages_content])
-        await db.document.update(
-            where={'id': document_id},
-            data={'content': content}
-        )
+        db_doc = db.query(Document).filter(Document.id == document_id).first()
+        if db_doc:
+            db_doc.content = "\n".join([p["content"] for p in pages_content])
+            db.commit()
         
     except Exception as e:
         print(f"Error processing PDF: {e}")
     finally:
+        db.close() # Always close the session
         # Optionally delete temp file
         if os.path.exists(file_path):
             os.remove(file_path)
@@ -50,7 +52,7 @@ async def process_pdf_background(document_id: int, file_path: str):
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: Prisma = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
@@ -64,11 +66,12 @@ async def upload_file(
         shutil.copyfileobj(file.file, buffer)
 
     # 1. Create Document record
-    db_doc = await db.document.create(
-        data={
-            "filename": file.filename
-        }
+    db_doc = Document(
+        filename=file.filename
     )
+    db.add(db_doc)
+    db.commit()
+    db.refresh(db_doc)
 
     # 2. Trigger background processing
     background_tasks.add_task(process_pdf_background, db_doc.id, temp_file_path)
@@ -82,16 +85,18 @@ async def upload_file(
 @router.delete("/{document_id}")
 async def delete_file(
     document_id: int,
-    db: Prisma = Depends(get_db)
+    db: Session = Depends(get_db)
 ):
     # 1. Delete from Vector Store
     vector_store = VectorStore()
     vector_store.delete_document_chunks(document_id)
 
     # 2. Delete from DB
-    try:
-        await db.document.delete(where={'id': document_id})
-    except Exception:
+    db_doc = db.query(Document).filter(Document.id == document_id).first()
+    if not db_doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    db.delete(db_doc)
+    db.commit()
 
     return {"message": "Document and its chunks deleted successfully"}
