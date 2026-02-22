@@ -7,4 +7,15 @@ const api = axios.create({
   },
 });
 
+api.interceptors.response.use(
+    response => response,
+    error => {
+        if (error.response) {
+            console.error("API Error:", error.response.data);
+            throw error.response.data;
+        }
+        throw error;
+    }
+);
+
 export default api;
