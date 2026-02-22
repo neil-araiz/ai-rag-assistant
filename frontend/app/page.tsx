@@ -103,6 +103,10 @@ export default function Home() {
     }
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
+      if (selectedFile.size > 5 * 1024 * 1024) {
+        toast.error("File size exceeds the 5MB limit.");
+        return;
+      }
       setPendingFile(selectedFile);
     }
   };
@@ -129,6 +133,10 @@ export default function Home() {
 
     const droppedFile = e.dataTransfer.files?.[0];
     if (droppedFile && droppedFile.type === "application/pdf") {
+      if (droppedFile.size > 5 * 1024 * 1024) {
+        toast.error("File size exceeds the 5MB limit.");
+        return;
+      }
       setPendingFile(droppedFile);
     } else if (droppedFile) {
       toast.error("Please upload a PDF file.");
