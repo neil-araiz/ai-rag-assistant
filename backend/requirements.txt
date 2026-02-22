@@ -2,3 +2,10 @@ fastapi
 uvicorn
 python-dotenv
 python-multipart
+sqlalchemy
+psycopg2
+supabase
+google-genai
+PyMuPDF
+langchain-text-splitters
+pydantic-settings

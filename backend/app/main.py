@@ -1,13 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-# Import your routes
-from app.routes import chat, upload
+load_dotenv()
+
+from app.db.database import engine, Base
+from app.models.document import Document
+
+Base.metadata.create_all(bind=engine)
+
+from app.routes import chat, upload, sample
 
 app = FastAPI(title="RAG AI Assistant Backend")
 
-# Allow frontend to access backend
-origins = ["http://localhost:3000"]  # your Next.js frontend URL
+origins = ["http://localhost:3000"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,9 +23,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routes
 app.include_router(upload.router, prefix="/upload", tags=["upload"])
 app.include_router(chat.router, prefix="/chat", tags=["chat"])
+app.include_router(sample.router, prefix="/sample", tags=["sample"])
 
 @app.get("/")
 def root():
