@@ -11,10 +11,17 @@ from app.routes import chat, upload, sample
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Connect to database
-    await db.connect()
+    try:
+        print("🚀 Connecting to database...")
+        await db.connect()
+        print("✅ Database connected successfully")
+    except Exception as e:
+        print(f"❌ Database connection failed: {e}")
+        raise e
     yield
     # Disconnect from database
     await db.disconnect()
+    print("💤 Database disconnected")
 
 app = FastAPI(title="RAG AI Assistant Backend", lifespan=lifespan)
 
