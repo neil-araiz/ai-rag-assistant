@@ -1,24 +1,24 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from prisma import Prisma
 from app.db.database import get_db
-from app.models.document import Document
 
 router = APIRouter()
 
 @router.get("/docs-count")
-def docs_count(db: Session = Depends(get_db)):
+async def docs_count(db: Prisma = Depends(get_db)):
     try:
-        count = db.query(Document).count()
+        count = await db.document.count()
         return {"documents_count": count}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 @router.get("/db-check")
-def db_check(db: Session = Depends(get_db)):
+async def db_check(db: Prisma = Depends(get_db)):
     try:
-        db.execute(text("SELECT 1"))
+        # Prisma doesn't have a direct 'execute text' like this for simple checks, 
+        # but we can try to query a table or just check connection.
+        # Alternatively, use db.query_raw if needed.
+        await db.query_raw('SELECT 1')
         return {"status": "success", "message": "Database connection is working"}
     except Exception as e:
         return {"status": "error", "message": str(e)}

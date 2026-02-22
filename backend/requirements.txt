@@ -9,3 +9,4 @@ google-genai
 PyMuPDF
 langchain-text-splitters
 pydantic-settings
+prisma
