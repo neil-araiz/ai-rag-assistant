@@ -37,7 +37,7 @@ export default function OnboardingOverlay({
     {
       id: "step-view-sample",
       title: "Preview",
-      text: "You can view the sample file natively in your browser first.",
+      text: "You can preview the sample file first.",
     },
     {
       id: "step-upload-btn",
