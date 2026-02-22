@@ -14,7 +14,7 @@ from app.routes import chat, upload, sample
 
 app = FastAPI(title="RAG AI Assistant Backend")
 
-origins = ["http://localhost:3000"]
+origins = ["http://localhost:3000", "https://neil-ai-rag.vercel.app"]
 
 app.add_middleware(
     CORSMiddleware,
