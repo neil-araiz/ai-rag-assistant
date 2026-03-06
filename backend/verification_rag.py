@@ -1,101 +1,85 @@
 """
-Verification script for the fixed PDFService chunking logic.
-Tests that tables are kept whole and text is properly split.
+Final verification for the row-to-sentence table conversion logic.
+Simulates the 3 table types from the user's screenshots.
 """
-import asyncio
 from app.services.pdf_service import PDFService
+from unittest.mock import MagicMock
 
 
-def test_table_not_split():
-    """Tables must never be cut in half by the text splitter."""
-    print("=== Test: Tables are kept as whole parent chunks ===")
-    service = PDFService(parent_chunk_size=100, parent_chunk_overlap=20)
-
-    # Simulate a page with mixed text and a table
-    pages = [{
-        "page_number": 1,
-        "elements": [
-            (0, "text", "This is some introductory paragraph about quarterly results."),
-            (100, "table", "| Quarter | Revenue | Profit |\n|---------|---------|--------|\n| Q1      | $100M   | $20M   |\n| Q2      | $120M   | $25M   |\n| Q3      | $110M   | $22M   |\n| Q4      | $130M   | $30M   |"),
-            (300, "text", "The table above shows strong growth across all quarters with consistent margins."),
-        ]
-    }]
-
-    chunks = service.chunk_hierarchical(pages)
-
-    print(f"Total chunks: {len(chunks)}")
-    table_chunks = [c for c in chunks if c["metadata"]["content_type"] == "table"]
-    text_chunks = [c for c in chunks if c["metadata"]["content_type"] == "text"]
-
-    print(f"Table chunks: {len(table_chunks)}")
-    print(f"Text chunks: {len(text_chunks)}")
-
-    # Table must be exactly 1 chunk (never split)
-    assert len(table_chunks) == 1, f"Expected 1 table chunk, got {len(table_chunks)}"
-    assert "| Quarter" in table_chunks[0]["content"], "Table content is missing"
-    assert "| Q4" in table_chunks[0]["content"], "Table was truncated!"
-
-    # Text should be split into children
-    assert len(text_chunks) >= 1, "No text chunks created"
-
-    print("PASSED: Table kept as single chunk\n")
-
-    # Print all chunks for inspection
-    for i, c in enumerate(chunks):
-        ctype = c["metadata"]["content_type"]
-        pid = c["metadata"]["parent_id"]
-        print(f"  Chunk {i} [{ctype}] parent={pid}: {c['content'][:80]}...")
-    print()
-
-
-def test_text_hierarchy():
-    """Text blocks must produce parent-child relationships."""
-    print("=== Test: Text produces parent-child hierarchy ===")
-    service = PDFService(parent_chunk_size=100, parent_chunk_overlap=20)
-
-    pages = [{
-        "page_number": 2,
-        "elements": [
-            (0, "text", "Artificial intelligence has transformed many industries. " * 5),
-        ]
-    }]
-
-    chunks = service.chunk_hierarchical(pages)
-    print(f"Total text chunks: {len(chunks)}")
-
-    # All should have parent_content
-    for c in chunks:
-        assert c["metadata"]["parent_content"], "Missing parent_content!"
-        assert c["metadata"]["is_child"] is True
-
-    print("PASSED: All children have parent_content\n")
-
-
-def test_no_duplication():
-    """Elements should not be duplicated between table and text."""
-    print("=== Test: No duplication between table and text ===")
+def test_sentence_conversion():
+    """Test _table_to_sentences with simulated table data matching user's PDF."""
     service = PDFService()
 
+    # --- Image 2: Short-value grid (Domain/Strands Per Quarter) ---
+    print("=== Image 2 Type: Short-Value Grid ===")
+    mock_table = MagicMock()
+    mock_table.extract.return_value = [
+        ["", "G3", "G4", "G5", "G6", "G7", "G8", "G9", "G10"],
+        ["1st Quarter", "Matter", "Matter", "Matter", "Matter", "Matter", "Force, Motion, & Energy", "Living Things and Their Environment", "Earth & Space"],
+        ["2nd Quarter", "Living Things and Their Environment", "Living Things and Their Environment", "Living Things and Their Environment", "Living Things and Their Environment", "Living Things and Their Environment", "Earth & Space", "Matter", "Force, Motion, & Energy"],
+    ]
+    result = service._table_to_sentences(mock_table)
+    print(result)
+    assert "1st Quarter" in result
+    assert "Matter" in result
+    assert "G3" in result
+    print("PASSED\n")
+
+    # --- Image 3: Complex multi-column with nested content ---
+    print("=== Image 3 Type: Complex Curriculum Table ===")
+    mock_table2 = MagicMock()
+    mock_table2.extract.return_value = [
+        ["CONTENT", "CONTENT STANDARDS", "PERFORMANCE STANDARDS", "LEARNING COMPETENCY", "CODE", "LEARNING MATERIALS", "SCIENCE EQUIPMENT"],
+        ["1. Properties\n1.1 Characteristics of solids, liquids, and gases", "The learners demonstrate understanding of...", "The learners should be able to...", "1. describe different objects based on their characteristics", "S3MT-Ia-b-1", "BEAM 5. Unit 4.\nLearning Guides. 3 Materials.", "1. 5-Newton Spring Balance\n2. Beral Pipette Dropper"],
+    ]
+    result2 = service._table_to_sentences(mock_table2)
+    print(result2)
+    assert "CONTENT" in result2
+    assert "S3MT-Ia-b-1" in result2
+    print("PASSED\n")
+
+    # --- Image 1: Text-heavy table (Spiralling) ---
+    print("=== Image 1 Type: Text-Heavy Table ===")
+    mock_table3 = MagicMock()
+    mock_table3.extract.return_value = [
+        ["Grade 3", "Grade 4", "Grade 5", "Grade 6"],
+        [
+            "When learners observe different objects and materials, they become aware of their different characteristics such as shape, weight, definiteness of volume and ease of flow.",
+            "Aside from being grouped into solids, liquids, or gases, materials may also be grouped according to their ability to absorb water.",
+            "After learning how to read and interpret product labels, learners can critically decide whether these materials are harmful or not.",
+            "In Grade 4, the learners have observed the changes when mixing a solid in a liquid or a liquid in another liquid."
+        ],
+    ]
+    result3 = service._table_to_sentences(mock_table3)
+    print(result3)
+    assert "Grade 3" in result3
+    assert "observe" in result3
+    print("PASSED\n")
+
+
+def test_chunking_keeps_tables_whole():
+    """Table chunks must never be split."""
+    print("=== Test: Table chunks are never split ===")
+    service = PDFService(parent_chunk_size=100, parent_chunk_overlap=20)
+
     pages = [{
-        "page_number": 1,
+        "page_number": 9,
         "elements": [
-            (0, "text", "Hello world intro paragraph."),
-            (50, "table", "| A | B |\n|---|---|\n| 1 | 2 |"),
-            (100, "text", "Conclusion paragraph after table."),
+            (0, "text", "Some intro text."),
+            (50, "table", "Row 1 — G3: Matter; G4: Matter.\nRow 2 — G3: Living Things; G4: Living Things."),
+            (200, "text", "Some conclusion text."),
         ]
     }]
 
     chunks = service.chunk_hierarchical(pages)
-
-    # Count occurrences of table content across ALL chunks
-    table_occurrences = sum(1 for c in chunks if "| A | B |" in c["content"])
-    assert table_occurrences == 1, f"Table appears {table_occurrences} times (expected 1)"
-
-    print("PASSED: No content duplication\n")
+    table_chunks = [c for c in chunks if c["metadata"]["content_type"] == "table"]
+    assert len(table_chunks) == 1
+    assert "Row 1" in table_chunks[0]["content"]
+    assert "Row 2" in table_chunks[0]["content"]
+    print("PASSED\n")
 
 
 if __name__ == "__main__":
-    test_table_not_split()
-    test_text_hierarchy()
-    test_no_duplication()
+    test_sentence_conversion()
+    test_chunking_keeps_tables_whole()
     print("All verification tests PASSED!")

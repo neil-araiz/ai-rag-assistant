@@ -1,6 +1,4 @@
 import fitz  # PyMuPDF
-import camelot
-import os
 from typing import List, Dict, Tuple
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -21,59 +19,83 @@ class PDFService:
         )
 
     # ------------------------------------------------------------------ #
+    #  TABLE → SENTENCE CONVERTER
+    # ------------------------------------------------------------------ #
+
+    def _table_to_sentences(self, table) -> str:
+        """
+        Convert a PyMuPDF Table object into natural-language sentences.
+        Each row becomes a descriptive sentence using the column headers.
+        Handles merged cells and None values gracefully.
+        """
+        extracted = table.extract()  # List[List[str | None]]
+
+        if not extracted or len(extracted) < 2:
+            # Table has no data rows, return raw text
+            return self._table_to_flat_text(extracted)
+
+        # First row = headers
+        headers = [str(h).strip() if h else f"Column {i+1}" for i, h in enumerate(extracted[0])]
+
+        sentences = []
+        for row_idx, row in enumerate(extracted[1:], start=1):
+            parts = []
+            for col_idx, cell in enumerate(row):
+                if cell is None or str(cell).strip() == "":
+                    continue
+                cell_text = str(cell).strip()
+                header = headers[col_idx] if col_idx < len(headers) else f"Column {col_idx+1}"
+                parts.append(f"{header}: {cell_text}")
+
+            if parts:
+                sentence = "Row " + str(row_idx) + " — " + "; ".join(parts) + "."
+                sentences.append(sentence)
+
+        if not sentences:
+            return self._table_to_flat_text(extracted)
+
+        return "\n".join(sentences)
+
+    def _table_to_flat_text(self, extracted: List[List]) -> str:
+        """Fallback: join all cell values as plain text."""
+        parts = []
+        for row in extracted:
+            for cell in row:
+                if cell and str(cell).strip():
+                    parts.append(str(cell).strip())
+        return " | ".join(parts)
+
+    # ------------------------------------------------------------------ #
     #  STEP 1 — Layout-Aware Extraction
     # ------------------------------------------------------------------ #
 
     def extract_text_with_layout(self, file_path: str) -> List[Dict]:
         """
-        Extracts structured content from a PDF.
-        Returns a list of pages, each containing ordered 'elements' that are
-        either TEXT blocks or TABLE blocks (never duplicated).
+        Extracts structured content from a PDF using PyMuPDF's native
+        find_tables() for table detection (no Camelot/Ghostscript needed).
+        Returns a list of pages with ordered elements (text or table).
         """
         doc = fitz.open(file_path)
-
-        # --- Camelot table extraction (get table bounding boxes per page) ---
-        tables_by_page: Dict[int, List[Dict]] = {}
-        try:
-            camelot_tables = camelot.read_pdf(file_path, pages='all', flavor='stream')
-            for table in camelot_tables:
-                page_num = table.page  # 1-indexed
-                if page_num not in tables_by_page:
-                    tables_by_page[page_num] = []
-                # Store markdown + bounding box for dedup
-                md_table = table.df.to_markdown(index=False)
-                # Camelot bbox: (x0, y0, x1, y1) — PDF coordinates
-                bbox = table._bbox if hasattr(table, '_bbox') else None
-                tables_by_page[page_num].append({
-                    "markdown": md_table,
-                    "bbox": bbox
-                })
-        except Exception as e:
-            print(f"Camelot table extraction skipped: {e}")
-
-        # --- Per-page: merge text blocks + tables in reading order ---
         pages_content = []
+
         for page_idx, page in enumerate(doc):
             real_page = page_idx + 1
-            page_height = page.rect.height
 
-            # Get all text blocks from PyMuPDF
-            blocks = page.get_text("blocks")  # (x0, y0, x1, y1, text, block_no, block_type)
+            # --- Detect tables using PyMuPDF native API ---
+            table_finder = page.find_tables()
+            table_rects = []  # Store bounding boxes to exclude from text blocks
+            table_elements = []  # (y_pos, "table", content)
 
-            # Build a set of table regions so we can skip text blocks inside them
-            table_regions = []
-            if real_page in tables_by_page:
-                for tbl_info in tables_by_page[real_page]:
-                    if tbl_info["bbox"]:
-                        # Camelot uses PDF coords (origin bottom-left)
-                        # Convert to PyMuPDF coords (origin top-left)
-                        bx0, by0, bx1, by1 = tbl_info["bbox"]
-                        table_regions.append(fitz.Rect(bx0, page_height - by1, bx1, page_height - by0))
+            for table in table_finder.tables:
+                bbox = table.bbox  # (x0, y0, x1, y1) in PyMuPDF coords
+                table_rects.append(fitz.Rect(bbox))
+                sentence_text = self._table_to_sentences(table)
+                table_elements.append((bbox[1], "table", sentence_text))
 
-            # Collect elements with their y-position for ordering
-            elements: List[Tuple[float, str, str]] = []  # (y_pos, type, content)
+            # --- Extract text blocks, skipping those inside table areas ---
+            blocks = page.get_text("blocks")
+            elements: List[Tuple[float, str, str]] = []
 
-            # Add text blocks (skip those overlapping table regions)
             for b in blocks:
                 bx0, by0, bx1, by1 = b[:4]
                 text = b[4].strip()
@@ -83,7 +105,7 @@ class PDFService:
                 block_rect = fitz.Rect(bx0, by0, bx1, by1)
 
                 # Skip if this block overlaps with any detected table area
-                if any(block_rect.intersects(tr) for tr in table_regions):
+                if any(block_rect.intersects(tr) for tr in table_rects):
                     continue
 
                 # Simple header heuristic
@@ -92,20 +114,13 @@ class PDFService:
                 else:
                     elements.append((by0, "text", text))
 
-            # Add table elements at their approximate y-position
-            if real_page in tables_by_page:
-                for tbl_info in tables_by_page[real_page]:
-                    y_pos = 0
-                    if tbl_info["bbox"]:
-                        y_pos = page_height - tbl_info["bbox"][3]  # top of table
-                    elements.append((y_pos, "table", tbl_info["markdown"]))
-
-            # Sort by vertical position (reading order)
+            # Merge text and table elements, sort by vertical position
+            elements.extend(table_elements)
             elements.sort(key=lambda e: e[0])
 
             pages_content.append({
                 "page_number": real_page,
-                "elements": elements  # [(y, type, content), ...]
+                "elements": elements
             })
 
         doc.close()
@@ -118,10 +133,9 @@ class PDFService:
     def chunk_hierarchical(self, pages_content: List[Dict]) -> List[Dict]:
         """
         Chunks content with Parent-Child hierarchy.
-        
-        KEY FIX: Tables are NEVER split by the text splitter.
-        Instead, each table becomes its own parent chunk.
-        Only regular text blocks are split into parent/child pairs.
+
+        Tables are NEVER split — each table becomes its own parent chunk.
+        Text blocks are split into parent (~1200 chars) → child (~300 chars).
         """
         hierarchical_chunks = []
 
@@ -129,7 +143,6 @@ class PDFService:
             page_number = page["page_number"]
             elements = page["elements"]
 
-            # Separate elements into contiguous text runs and standalone tables
             text_buffer = []
             parent_index = 0
 
@@ -170,7 +183,6 @@ class PDFService:
                     parent_id = f"p{page_number}_{parent_index}"
                     table_content = f"[TABLE]\n{content}"
 
-                    # For tables, child == parent (no splitting)
                     hierarchical_chunks.append({
                         "content": table_content,
                         "metadata": {
@@ -182,7 +194,6 @@ class PDFService:
                         }
                     })
                     parent_index += 1
-
                 else:
                     text_buffer.append(content)
 

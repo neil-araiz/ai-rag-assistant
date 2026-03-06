@@ -11,7 +11,3 @@ google-genai
 PyMuPDF
 langchain-text-splitters
 pydantic-settings
-camelot-py[cv]
-opencv-python
-pandas
-tabulate

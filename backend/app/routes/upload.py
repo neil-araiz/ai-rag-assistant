@@ -24,20 +24,31 @@ async def process_pdf(document_id: int, file_path: str):
         # 2. Hierarchical Chunking (Parent-Child)
         chunks = pdf_service.chunk_hierarchical(pages_content)
         
-        # 3. Embedding and Storage
-        for chunk in chunks:
-            embedding = vector_store.generate_embedding(chunk["content"])
-            vector_store.store_chunk(
-                document_id=document_id,
-                content=chunk["content"],
-                embedding=embedding,
-                metadata=chunk["metadata"]
-            )
+        # 3. Batch Embedding (20 texts per API call with rate limiting)
+        texts = [chunk["content"] for chunk in chunks]
+        print(f"Generating embeddings for {len(texts)} chunks...")
+        embeddings = vector_store.generate_embeddings_batch(texts)
+
+        # 4. Store all chunks in a single DB connection
+        prepared_chunks = []
+        for chunk, embedding in zip(chunks, embeddings):
+            prepared_chunks.append({
+                "content": chunk["content"],
+                "embedding": embedding,
+                "metadata": chunk["metadata"]
+            })
+        
+        vector_store.store_chunks_batch(document_id, prepared_chunks)
         
         # 4. Save full joined content to Document model
         db_doc = db.query(Document).filter(Document.id == document_id).first()
         if db_doc:
-            db_doc.content = "\n\n---\n\n".join([p["content"] for p in pages_content])
+            # Reconstruct full text from elements per page
+            page_texts = []
+            for p in pages_content:
+                parts = [elem[2] for elem in p["elements"]]
+                page_texts.append("\n\n".join(parts))
+            db_doc.content = "\n\n---\n\n".join(page_texts)
             db.commit()
         
     except Exception as e:
