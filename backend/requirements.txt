@@ -1,4 +1,7 @@
 fastapi
+requests>=2.32.0
+urllib3>=2.0.0
+chardet<6.0.0
 uvicorn
 python-dotenv
 python-multipart
@@ -8,3 +11,7 @@ google-genai
 PyMuPDF
 langchain-text-splitters
 pydantic-settings
+camelot-py[cv]
+opencv-python
+pandas
+tabulate

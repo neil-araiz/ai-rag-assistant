@@ -15,8 +15,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL environment variable is missing in .env")
 
-# Neon uses connection pooling, but for simple scripts NullPool is often safer 
-# to avoid hanging connections if not using a pouncer.
 engine = create_engine(DATABASE_URL, poolclass=NullPool, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

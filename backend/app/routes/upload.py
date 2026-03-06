@@ -12,17 +12,17 @@ from app.core.config import get_settings
 router = APIRouter()
 settings = get_settings()
 
-async def process_pdf_background(document_id: int, file_path: str):
+async def process_pdf(document_id: int, file_path: str):
     db = SessionLocal()
     pdf_service = PDFService()
     vector_store = VectorStore()
     
     try:
-        # 1. Extract Text
-        pages_content = pdf_service.extract_text_with_pages(file_path)
+        # 1. Extract Text with Layout Awareness
+        pages_content = pdf_service.extract_text_with_layout(file_path)
         
-        # 2. Chunking
-        chunks = pdf_service.chunk_content(pages_content)
+        # 2. Hierarchical Chunking (Parent-Child)
+        chunks = pdf_service.chunk_hierarchical(pages_content)
         
         # 3. Embedding and Storage
         for chunk in chunks:
@@ -34,23 +34,22 @@ async def process_pdf_background(document_id: int, file_path: str):
                 metadata=chunk["metadata"]
             )
         
-        # 4. Save full content
+        # 4. Save full joined content to Document model
         db_doc = db.query(Document).filter(Document.id == document_id).first()
         if db_doc:
-            db_doc.content = "\n".join([p["content"] for p in pages_content])
+            db_doc.content = "\n\n---\n\n".join([p["content"] for p in pages_content])
             db.commit()
         
     except Exception as e:
         print(f"Error processing PDF: {e}")
+        raise e # Re-raise to ensure the endpoint can handle the error
     finally:
-        db.close() # Always close the session
-        # Optionally delete temp file
+        db.close()
         if os.path.exists(file_path):
             os.remove(file_path)
 
 @router.post("/")
 async def upload_file(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db)
 ):
@@ -62,25 +61,30 @@ async def upload_file(
     os.makedirs(temp_dir, exist_ok=True)
     temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
     
-    with open(temp_file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    try:
+        with open(temp_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-    # 1. Create Document record
-    db_doc = Document(
-        filename=file.filename
-    )
-    db.add(db_doc)
-    db.commit()
-    db.refresh(db_doc)
+        # 1. Create Document record
+        db_doc = Document(
+            filename=file.filename
+        )
+        db.add(db_doc)
+        db.commit()
+        db.refresh(db_doc)
 
-    # 2. Trigger background processing
-    background_tasks.add_task(process_pdf_background, db_doc.id, temp_file_path)
+        # 2. Wait for processing (synchronous/awaited)
+        await process_pdf(db_doc.id, temp_file_path)
 
-    return {
-        "document_id": db_doc.id,
-        "filename": file.filename,
-        "message": "Upload successful, processing started."
-    }
+        return {
+            "document_id": db_doc.id,
+            "filename": file.filename,
+            "message": "Upload and indexing complete."
+        }
+    except Exception as e:
+        # If processing fails, we might want to clean up the DB record
+        # but for now we just return the error
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
 @router.delete("/{document_id}")
 async def delete_file(
